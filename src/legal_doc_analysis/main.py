@@ -30,14 +30,30 @@ def process_zip_file(zip_path: Path):
         
         if result['success']:
             print(f"✅ Successfully extracted {len(result['extracted_files'])} files to: {result['output_directory']}")
-            print(f"📄 Extracted files:")
-            for file_path in result['extracted_files']:
-                print(f"   - {Path(file_path).name}")
+            print("🔄 Processing documents...")
             
-            # TODO: Add document processing logic here
-            # For now, just list the extracted files
-            
-            return True
+            try:
+                # Initialize the document processor
+                from legal_doc_analysis.document_processor import DocumentProcessor
+                from config.settings import VECTOR_STORE_DIR
+                
+                processor = DocumentProcessor(
+                    case_dir=Path(result['output_directory']),
+                    persist_dir=VECTOR_STORE_DIR
+                )
+                
+                # Create and save the vector store
+                if processor.create_vector_store():
+                    print("✅ Document processing and indexing complete!")
+                else:
+                    print("❌ Failed to create vector store")
+                return True
+                
+            except Exception as e:
+                error_msg = f"Error during document processing: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                print(f"❌ {error_msg}")
+                return False
         else:
             print(f"❌ Failed to process {zip_path.name}: {result.get('error', 'Unknown error')}")
             return False

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legal Document Analysis System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .result-section {
+            display: none;
+            margin-top: 20px;
+        }
+        .sources-list {
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Legal Document Analysis System</h1>
+        
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button" role="tab" aria-controls="upload" aria-selected="true">Upload Case</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="query-tab" data-bs-toggle="tab" data-bs-target="#query" type="button" role="tab" aria-controls="query" aria-selected="false">Query Documents</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="chronology-tab" data-bs-toggle="tab" data-bs-target="#chronology" type="button" role="tab" aria-controls="chronology" aria-selected="false">Medical Chronology</button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <!-- Upload Tab -->
+            <div class="tab-pane fade show active" id="upload" role="tabpanel" aria-labelledby="upload-tab">
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Upload Case File</h5>
+                        <p class="card-text">Upload a ZIP file containing case documents.</p>
+                        
+                        <form id="upload-form" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="file" class="form-label">ZIP File</label>
+                                <input class="form-control" type="file" id="file" name="file" accept=".zip" required>
+                            </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="force-rebuild" name="force_rebuild">
+                                <label class="form-check-label" for="force-rebuild">Force rebuild vector store</label>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Upload and Process</button>
+                        </form>
+                        
+                        <div id="upload-loading" class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Processing case file... This may take several minutes.</p>
+                        </div>
+                        
+                        <div id="upload-result" class="result-section">
+                            <h5 class="mt-4">Processing Results</h5>
+                            <div id="upload-result-content" class="alert alert-success"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Available Cases</h5>
+                        <div id="cases-list">Loading cases...</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Query Tab -->
+            <div class="tab-pane fade" id="query" role="tabpanel" aria-labelledby="query-tab">
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Query Documents</h5>
+                        <p class="card-text">Ask questions about the legal documents in a case.</p>
+                        
+                        <form id="query-form">
+                            <div class="mb-3">
+                                <label for="query-case" class="form-label">Select Case</label>
+                                <select class="form-select" id="query-case" name="case_name" required>
+                                    <option value="">Loading cases...</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="question" class="form-label">Your Question</label>
+                                <textarea class="form-control" id="question" name="question" rows="3" placeholder="Who is my client? What injuries did they sustain?" required></textarea>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Ask Question</button>
+                        </form>
+                        
+                        <div id="query-loading" class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Processing your question... This may take a moment.</p>
+                        </div>
+                        
+                        <div id="query-result" class="result-section">
+                            <h5 class="mt-4">Answer</h5>
+                            <div id="query-answer" class="alert alert-info"></div>
+                            
+                            <h6 class="mt-3">Sources</h6>
+                            <ul id="query-sources" class="sources-list"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Chronology Tab -->
+            <div class="tab-pane fade" id="chronology" role="tabpanel" aria-labelledby="chronology-tab">
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Generate Medical Chronology</h5>
+                        <p class="card-text">Generate a medical chronology for a case.</p>
+                        
+                        <form id="chronology-form">
+                            <div class="mb-3">
+                                <label for="chronology-case" class="form-label">Select Case</label>
+                                <select class="form-select" id="chronology-case" name="case_name" required>
+                                    <option value="">Loading cases...</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Generate Chronology</button>
+                        </form>
+                        
+                        <div id="chronology-loading" class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Generating medical chronology... This may take several minutes.</p>
+                        </div>
+                        
+                        <div id="chronology-result" class="result-section">
+                            <h5 class="mt-4">Medical Chronology</h5>
+                            <div id="chronology-content" class="alert alert-info"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Load cases on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadCases();
+        });
+        
+        // Load available cases
+        function loadCases() {
+            fetch('/api/cases')
+                .then(response => response.json())
+                .then(cases => {
+                    // Update cases list
+                    const casesList = document.getElementById('cases-list');
+                    if (cases.length === 0) {
+                        casesList.innerHTML = '<p>No cases found. Upload a case file to get started.</p>';
+                    } else {
+                        let html = '<table class="table">';
+                        html += '<thead><tr><th>Case Name</th><th>Files</th><th>Vector Store</th></tr></thead>';
+                        html += '<tbody>';
+                        
+                        cases.forEach(c => {
+                            html += `<tr>
+                                <td>${c.name}</td>
+                                <td>${c.file_count}</td>
+                                <td>${c.vector_store_exists ? '✅' : '❌'}</td>
+                            </tr>`;
+                        });
+                        
+                        html += '</tbody></table>';
+                        casesList.innerHTML = html;
+                    }
+                    
+                    // Update case dropdowns
+                    const queryCase = document.getElementById('query-case');
+                    const chronologyCase = document.getElementById('chronology-case');
+                    
+                    queryCase.innerHTML = '';
+                    chronologyCase.innerHTML = '';
+                    
+                    if (cases.length === 0) {
+                        queryCase.innerHTML = '<option value="">No cases available</option>';
+                        chronologyCase.innerHTML = '<option value="">No cases available</option>';
+                    } else {
+                        cases.forEach(c => {
+                            const option = document.createElement('option');
+                            option.value = c.name;
+                            option.textContent = c.name;
+                            
+                            queryCase.appendChild(option.cloneNode(true));
+                            chronologyCase.appendChild(option);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading cases:', error);
+                });
+        }
+        
+        // Upload form submission
+        document.getElementById('upload-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const uploadLoading = document.getElementById('upload-loading');
+            const uploadResult = document.getElementById('upload-result');
+            const uploadResultContent = document.getElementById('upload-result-content');
+            
+            uploadLoading.style.display = 'block';
+            uploadResult.style.display = 'none';
+            
+            fetch('/api/cases/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.detail || 'Error processing case');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                uploadLoading.style.display = 'none';
+                uploadResult.style.display = 'block';
+                
+                uploadResultContent.innerHTML = `
+                    <p><strong>Success!</strong> Case processed successfully.</p>
+                    <p>Case Name: ${data.case_name}</p>
+                    <p>Documents Processed: ${data.document_count}</p>
+                    <p>Processing Time: ${data.processing_time.toFixed(2)} seconds</p>
+                `;
+                
+                // Reload cases list
+                loadCases();
+            })
+            .catch(error => {
+                uploadLoading.style.display = 'none';
+                uploadResult.style.display = 'block';
+                uploadResultContent.className = 'alert alert-danger';
+                uploadResultContent.textContent = `Error: ${error.message}`;
+            });
+        });
+        
+        // Query form submission
+        document.getElementById('query-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const queryLoading = document.getElementById('query-loading');
+            const queryResult = document.getElementById('query-result');
+            const queryAnswer = document.getElementById('query-answer');
+            const querySources = document.getElementById('query-sources');
+            
+            queryLoading.style.display = 'block';
+            queryResult.style.display = 'none';
+            
+            fetch('/api/query', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    case_name: formData.get('case_name'),
+                    question: formData.get('question')
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.detail || 'Error processing query');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                queryLoading.style.display = 'none';
+                queryResult.style.display = 'block';
+                
+                queryAnswer.textContent = data.answer;
+                
+                querySources.innerHTML = '';
+                if (data.sources && data.sources.length > 0) {
+                    data.sources.forEach(source => {
+                        const li = document.createElement('li');
+                        li.textContent = source;
+                        querySources.appendChild(li);
+                    });
+                } else {
+                    querySources.innerHTML = '<li>No sources available</li>';
+                }
+            })
+            .catch(error => {
+                queryLoading.style.display = 'none';
+                queryResult.style.display = 'block';
+                queryAnswer.className = 'alert alert-danger';
+                queryAnswer.textContent = `Error: ${error.message}`;
+                querySources.innerHTML = '';
+            });
+        });
+        
+        // Chronology form submission
+        document.getElementById('chronology-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const chronologyLoading = document.getElementById('chronology-loading');
+            const chronologyResult = document.getElementById('chronology-result');
+            const chronologyContent = document.getElementById('chronology-content');
+            
+            chronologyLoading.style.display = 'block';
+            chronologyResult.style.display = 'none';
+            
+            fetch('/api/chronology', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    case_name: formData.get('case_name')
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.detail || 'Error generating chronology');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                chronologyLoading.style.display = 'none';
+                chronologyResult.style.display = 'block';
+                
+                // Replace newlines with <br> tags for proper HTML display
+                chronologyContent.innerHTML = data.chronology.replace(/\n/g, '<br>');
+            })
+            .catch(error => {
+                chronologyLoading.style.display = 'none';
+                chronologyResult.style.display = 'block';
+                chronologyContent.className = 'alert alert-danger';
+                chronologyContent.textContent = `Error: ${error.message}`;
+            });
+        });
+    </script>
+</body>
+</html>

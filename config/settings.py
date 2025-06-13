@@ -16,9 +16,10 @@ INPUT_DIR = DATA_DIR / "input"
 PROCESSED_DIR = DATA_DIR / "processed"
 DATABASE_DIR = DATA_DIR / "database"
 LOGS_DIR = BASE_DIR / "logs"
+VECTOR_STORE_DIR = DATA_DIR / "vector_store"
 
 # Create directories if they don't exist
-for directory in [INPUT_DIR, PROCESSED_DIR, DATABASE_DIR, LOGS_DIR]:
+for directory in [INPUT_DIR, PROCESSED_DIR, DATABASE_DIR, LOGS_DIR, VECTOR_STORE_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # Database configuration

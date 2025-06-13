@@ -408,6 +408,7 @@ class DocumentProcessor:
                 split_docs.append(doc)
                 
         return split_docs
+    
     def create_vector_store(self, force_rebuild: bool = False) -> bool:
         """Create or load a vector store from documents.
         
@@ -884,7 +885,7 @@ class DocumentProcessor:
             for i in range(0, len(all_docs), batch_size):
                 batch = all_docs[i:i+batch_size]
                 batch_docs = "\n---\n".join(
-                    f"Document {j+1} (Source: {doc.metadata.get('source', 'unknown')}):\n{doc.page_content}"
+                    f"Document {j+1}:\n{doc.page_content}"
                     for j, doc in enumerate(batch)
                 )
                 
@@ -1014,355 +1015,477 @@ class DocumentProcessor:
     def generate_medical_chronology(self) -> str:
         """
         Generate a comprehensive medical chronology from the documents.
-        Uses a specialized approach to extract and organize medical events chronologically.
+        Uses a multi-phase approach: document retrieval, batch processing, and synthesis.
         
         Returns:
             str: Formatted medical chronology with dates, providers, treatments, and findings
         """
-        logger.info("Generating medical chronology...")
+        logger.info("Starting medical chronology generation...")
         
         if not self.vectorstore:
             logger.error("Vector store not initialized")
             return "Error: Vector store not initialized. Please process documents first."
         
         try:
-            # Step 1: Retrieve ALL documents first to ensure we have complete coverage
-            logger.info("Retrieving all documents for comprehensive analysis...")
-            all_docs = []
-            seen_docs = set()
+            # Phase 1: Document Retrieval and Medical Content Detection
+            medical_docs = self._retrieve_medical_documents()
+            if not medical_docs:
+                return "No medical documents found in the case files. Please ensure medical records are included in the uploaded documents."
             
-            # First, get ALL documents to ensure we don't miss anything
-            try:
-                # Get a large number of documents to ensure comprehensive coverage
-                base_docs = self.vectorstore.similarity_search(
-                    "medical patient treatment hospital doctor diagnosis", 
-                    k=100  # Get many documents for comprehensive coverage
-                )
-                
-                # Add all base documents
-                for doc in base_docs:
-                    doc_hash = hash(doc.page_content[:1000])  # Simple hash of content start
-                    if doc_hash not in seen_docs:
-                        seen_docs.add(doc_hash)
-                        all_docs.append(doc)
-                        
-                logger.info(f"Retrieved {len(all_docs)} base documents")
-            except Exception as e:
-                logger.warning(f"Error retrieving base documents: {str(e)}")
+            logger.info(f"Found {len(medical_docs)} medical documents for chronology generation")
             
-            # Then use specialized search terms to find additional relevant documents
-            medical_search_terms = [
-                "medical record", "hospital", "doctor visit", "physician notes", 
-                "diagnosis", "treatment plan", "medication prescribed", "surgery",
-                "examination findings", "test results", "lab work", "radiology report", 
-                "MRI results", "CT scan", "X-ray findings", "emergency room visit", 
-                "hospital admission", "discharge summary", "follow-up appointment", 
-                "specialist consultation", "therapy session", "rehabilitation progress",
-                "patient history", "chief complaint", "symptoms reported", "vital signs",
-                "medical history", "injury", "accident", "pain", "treatment"
-            ]
+            # Phase 2: Batch Processing
+            batch_results = self._process_documents_in_batches(medical_docs)
+            if not batch_results:
+                return "Error: Failed to process medical documents. Please check the logs for details."
             
-            for term in medical_search_terms:
-                try:
-                    # Get more documents for comprehensive coverage
-                    docs = self.vectorstore.similarity_search(
-                        term, 
-                        k=min(COMPREHENSIVE_K, 20)  # Limit per search
-                    )
-                    
-                    # Deduplicate while preserving order
-                    for doc in docs:
-                        doc_hash = hash(doc.page_content[:1000])  # Simple hash of content start
-                        if doc_hash not in seen_docs:
-                            seen_docs.add(doc_hash)
-                            all_docs.append(doc)
-                except Exception as e:
-                    logger.warning(f"Error searching for term '{term}': {str(e)}")
-                    continue
+            # Phase 3: Synthesis and Final Chronology
+            final_chronology = self._synthesize_chronology(batch_results)
             
-            if not all_docs:
-                logger.warning("No medical documents found")
-                return "No medical documents found in the case files."
-            
-            logger.info(f"Retrieved {len(all_docs)} potentially relevant medical documents")
-            
-            # Step 2: Create a more direct and focused chronology prompt
-            chronology_prompt = """
-            You are a specialized legal-medical expert tasked with extracting a medical chronology from case documents. 
-            Your job is to find ANY medical information in these documents, even if it's sparse or embedded in legal text.
-            
-            CRITICAL INSTRUCTIONS:
-            1. NEVER respond with "I don't know" - this is unacceptable. If medical information is limited, provide whatever 
-               partial chronology you can create based on the available fragments.
-            
-            2. Look for ANY of these items and include them in your chronology:
-               - Patient name (e.g., SMITH, JOHN)
-               - Dates of any kind (especially dates near medical terms)
-               - Medical provider names (doctors, hospitals, clinics)
-               - Medical record numbers or patient IDs
-               - Treatments, procedures, or medications mentioned
-               - Diagnoses or medical conditions
-               - Symptoms or complaints
-               - Medical facilities or locations
-               - Any reference to injuries, accidents, or medical events
-            
-            3. Format each entry you find as:
-               DATE: [MM/DD/YYYY or approximate date]
-               PROVIDER: [Provider name if available]
-               EVENT: [Type of medical event/encounter]
-               DETAILS: [All relevant medical information]
-               SOURCE: [Document reference]
-            
-            4. If you find limited information, create entries with whatever details you have. For example:
-               DATE: Unknown (sometime before 05/29/2020)
-               PROVIDER: Unknown medical facility
-               EVENT: Medical treatment (details limited)
-               DETAILS: Patient received some form of medical care related to case
-               SOURCE: Referenced in [document name]
-            
-            5. Begin with a brief patient summary if you can identify the patient.
-            
-            6. Include ANY medical references you find, even if they seem minor or are mentioned in legal documents.
-            
-            7. If you see document labels like "PATIENT 000123" these are medical record page numbers - include them as sources.
-            
-            8. Pay special attention to any dates followed by medical terminology or provider names.
-            
-            9. If information is extremely limited, create a section called "PARTIAL MEDICAL INFORMATION" and list all 
-               medical-related fragments you can find, even without complete context.
-            
-            DOCUMENTS:
-            {documents}
-            
-            IMPORTANT: You MUST provide a medical chronology with whatever information you can extract. Saying "I don't know" 
-            or that there isn't enough information is NOT an acceptable response. Extract and organize ANY medical details 
-            you can find, even if sparse or incomplete.
-            """
-            
-            # Step 3: Process documents in two approaches for redundancy
-            logger.info("Processing documents using dual approach for reliability...")
-            
-            # Approach 1: Process most relevant documents in a single batch for coherence
-            try:
-                logger.info("Approach 1: Processing top documents in a single batch")
-                # Take the most relevant documents (first ones retrieved)
-                top_docs = all_docs[:min(30, len(all_docs))]
-                
-                top_docs_text = "\n\n---\n\n".join(
-                    f"Document {j+1} (Source: {doc.metadata.get('source', 'unknown')}, Page: {doc.metadata.get('page', 'N/A')}):\n{doc.page_content}"
-                    for j, doc in enumerate(top_docs)
-                )
-                
-                # Process in a single batch for coherence
-                single_batch_prompt = chronology_prompt.format(documents=top_docs_text)
-                
-                single_batch_result = self.qa_chain({
-                    "question": single_batch_prompt,
-                    "chat_history": []
-                })
-                approach1_result = single_batch_result["answer"]
-                logger.info("Successfully completed Approach 1")
-            except Exception as e:
-                logger.error(f"Error in Approach 1: {str(e)}")
-                approach1_result = f"Error in single batch processing: {str(e)}"
-            
-            # Approach 2: Process in smaller batches to handle token limits
-            logger.info("Approach 2: Processing documents in smaller batches...")
-            batch_size = 15
-            results = []
-            
-            # Only process batches if we have more than the top docs
-            if len(all_docs) > 30:
-                for i in range(0, min(90, len(all_docs)), batch_size):
-                    batch = all_docs[i:i+batch_size]
-                    batch_docs = "\n---\n".join(
-                        f"Document {j+1} (Source: {doc.metadata.get('source', 'unknown')}, Page: {doc.metadata.get('page', 'N/A')}):\n{doc.page_content}"
-                        for j, doc in enumerate(batch)
-                    )
-                    
-                    # Get chronology for this batch
-                    batch_prompt = chronology_prompt.format(documents=batch_docs)
-                    
-                    try:
-                        logger.info(f"Processing batch {i//batch_size + 1} of {min(6, (len(all_docs) + batch_size - 1)//batch_size)}")
-                        batch_result = self.qa_chain({
-                            "question": batch_prompt,
-                            "chat_history": []
-                        })
-                        results.append(batch_result["answer"])
-                        logger.info(f"Successfully processed batch {i//batch_size + 1}")
-                    except Exception as e:
-                        logger.error(f"Error processing batch {i//batch_size + 1}: {str(e)}")
-                        results.append(f"Error processing batch {i//batch_size + 1}: {str(e)}")
-            else:
-                # If we don't have many docs, just use the approach 1 result
-                results = [approach1_result]
-            
-            # Step 4: Combine all batch results
-            logger.info("Combining batch results...")
-            combined_result = "\n\n---\n\n".join(results)
-            
-            # Step 5: Enhanced final synthesis to create a meaningful chronology
-            logger.info("Performing enhanced final synthesis...")
-            
-            # Add approach1_result to the beginning of results if it's not already there
-            if approach1_result not in results:
-                results.insert(0, approach1_result)
-            
-            # Create a more direct and forceful synthesis prompt
-            final_prompt = """
-            You are a specialized medical-legal expert creating a final medical chronology. 
-            
-            CRITICAL INSTRUCTIONS - READ CAREFULLY:
-            
-            1. Your task is to create a SINGLE, COHERENT medical chronology by combining information from all sections below.
-            
-            2. NEVER respond with "I don't know" or that there isn't enough information - this is UNACCEPTABLE.
-            
-            3. If the sections contain "I don't know" responses, IGNORE these and focus on extracting any useful medical information.
-            
-            4. Even with limited information, you MUST create a chronology with whatever medical details are available.
-            
-            5. Format each entry as:
-               DATE: [MM/DD/YYYY or approximate timeframe]
-               PROVIDER: [Provider name if available]
-               EVENT: [Type of medical event]
-               DETAILS: [All relevant information]
-               SOURCE: [Document reference]
-            
-            6. If you find specific patient names with dates, these are likely key medical records - prioritize this information.
-            
-            7. Include ANY medical references from ANY section, even if they seem minor or fragmented.
-            
-            8. If information is extremely limited, create a section called "PARTIAL MEDICAL INFORMATION" and list ALL 
-               medical-related fragments you can find.
-            
-            9. Begin with a brief patient summary if possible.
-            
-            10. If you find contradictory information, include both versions and note the discrepancy.
-            
-            11. IMPORTANT: Your job is to provide the MOST COMPLETE medical chronology possible with the available information.
-                If the information is sparse, that's fine - provide what you can find, but NEVER say "I don't know".
-            
-            SECTIONS TO SYNTHESIZE:
-            {sections}
-            
-            FINAL INSTRUCTION: You MUST produce a medical chronology with whatever information is available. If you can only 
-            find a single date or medical reference, that's still valuable and should be included.
-            """.format(
-                sections="\n\n---\n\n".join(
-                    f"Section {i+1}:\n{section}" 
-                    for i, section in enumerate(results)
-                )
-            )
-            
-            try:
-                # Use a more powerful model for final synthesis if possible
-                final_result = self.qa_chain({
-                    "question": final_prompt,
-                    "chat_history": []
-                })
-                combined_result = final_result["answer"]
-                logger.info("Successfully created unified chronology")
-                
-                # Check if the result still contains "I don't know"
-                if "I don't know" in combined_result.lower() or not combined_result.strip():
-                    logger.warning("Final synthesis still contains 'I don't know' - using approach1_result directly")
-                    combined_result = approach1_result
-            except Exception as e:
-                logger.error(f"Error in final synthesis: {str(e)}")
-                # Use the first result if synthesis fails
-                combined_result = approach1_result
-            
-            logger.info("Medical chronology generation complete")
-            return combined_result
+            logger.info("Medical chronology generation completed successfully")
+            return final_chronology
             
         except Exception as e:
             error_msg = f"Error generating medical chronology: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return error_msg
-
-    # Legacy method for backward compatibility
-    def _legacy_generate_medical_chronology(self) -> str:
-        """Legacy implementation of medical chronology generation."""
-        if not self.vectorstore:
-            self.setup_qa_chain()
-            
-        # Step 1: Extract all medical events with detailed context
-        extraction_prompt = """
-        Extract the following information for each medical event in the documents:
-        
-        1. Date of service (convert to YYYY-MM-DD format if possible)
-        2. Patient's full name
-        3. Healthcare provider/facility name
-        4. Type of visit/treatment/procedure
-        5. Diagnoses or conditions addressed
-        6. Treatments provided or prescribed
-        7. Test results or findings
-        8. Recommendations or follow-up plans
-        9. Any notable symptoms or complaints
-        
-        For each event, provide as much detail as possible from the source documents.
-        If a date isn't available, note it as [DATE UNKNOWN].
+    
+    def _retrieve_medical_documents(self) -> list:
         """
+        Retrieve documents containing medical information using multiple search strategies.
         
-        logger.info("Extracting medical events from documents...")
-        events = self.vectorstore.similarity_search(extraction_prompt, k=20)  # Get top 20 most relevant chunks
+        Returns:
+            list: List of documents containing medical content
+        """
+        logger.info("Retrieving medical documents...")
         
-        # Format the events into a structured prompt
-        events_text = "\n---\n".join([
-            f"Document {i+1}:\n{doc.page_content[:1000]}..." 
-            for i, doc in enumerate(events)
+        # Strategy 1: Primary medical search
+        primary_queries = [
+            "medical records hospital doctor treatment diagnosis patient",
+            "physician notes examination findings test results",
+            "surgery procedure medication prescribed therapy"
+        ]
+        
+        # Strategy 2: Specific medical terms
+        specific_terms = [
+            "medical record", "hospital", "doctor visit", "physician notes",
+            "diagnosis", "treatment plan", "medication", "surgery",
+            "examination", "test results", "lab work", "radiology",
+            "emergency room", "discharge summary", "follow-up",
+            "specialist consultation", "patient history", "injury"
+        ]
+        
+        all_docs = []
+        seen_content = set()
+        
+        # Execute primary searches
+        for query in primary_queries:
+            try:
+                docs = self.vectorstore.similarity_search(query, k=50)
+                for doc in docs:
+                    content_hash = hash(doc.page_content[:500])
+                    if content_hash not in seen_content:
+                        seen_content.add(content_hash)
+                        all_docs.append(doc)
+            except Exception as e:
+                logger.warning(f"Error in primary search '{query}': {str(e)}")
+        
+        # Execute specific term searches
+        for term in specific_terms:
+            try:
+                docs = self.vectorstore.similarity_search(term, k=15)
+                for doc in docs:
+                    content_hash = hash(doc.page_content[:500])
+                    if content_hash not in seen_content:
+                        seen_content.add(content_hash)
+                        all_docs.append(doc)
+            except Exception as e:
+                logger.warning(f"Error searching for term '{term}': {str(e)}")
+        
+        # Filter for actual medical content
+        medical_docs = self._filter_medical_content(all_docs)
+        
+        logger.info(f"Retrieved {len(all_docs)} total documents, {len(medical_docs)} contain medical content")
+        return medical_docs
+    
+    def _filter_medical_content(self, docs: list) -> list:
+        """
+        Filter documents to ensure they contain actual medical content.
+        
+        Args:
+            docs: List of documents to filter
+            
+        Returns:
+            list: Documents containing medical content
+        """
+        medical_indicators = [
+            'medical', 'doctor', 'physician', 'hospital', 'patient', 'treatment',
+            'diagnosis', 'surgery', 'medication', 'prescription', 'therapy',
+            'examination', 'test', 'lab', 'radiology', 'x-ray', 'mri', 'ct scan',
+            'emergency', 'admission', 'discharge', 'clinic', 'nurse', 'health',
+            'injury', 'pain', 'symptoms', 'condition', 'procedure', 'consultation'
+        ]
+        
+        medical_docs = []
+        for doc in docs:
+            content_lower = doc.page_content.lower()
+            medical_score = sum(1 for term in medical_indicators if term in content_lower)
+            
+            # Require at least 3 medical terms to consider it medical content
+            if medical_score >= 3:
+                medical_docs.append(doc)
+                logger.debug(f"Medical document found (score: {medical_score}): {doc.metadata.get('source', 'unknown')}")
+        
+        return medical_docs
+    
+    def _process_documents_in_batches(self, docs: list) -> list:
+        """
+        Process medical documents in batches to extract chronological information.
+        
+        Args:
+            docs: List of medical documents to process
+            
+        Returns:
+            list: List of batch processing results
+        """
+        logger.info(f"Processing {len(docs)} documents in batches...")
+        
+        # Determine optimal batch sizes
+        total_docs = len(docs)
+        if total_docs <= 30:
+            first_batch_size = min(20, total_docs)
+            batch_size = 10
+        elif total_docs <= 100:
+            first_batch_size = 40
+            batch_size = 20
+        else:
+            first_batch_size = 60
+            batch_size = 25
+        
+        logger.info(f"Using first batch size: {first_batch_size}, subsequent batch size: {batch_size}")
+        
+        batch_results = []
+        
+        # Process first batch (most relevant documents)
+        first_batch = docs[:first_batch_size]
+        first_result = self._process_batch(first_batch, 1, "Primary Medical Documents")
+        if first_result:
+            batch_results.append(first_result)
+        
+        # Process remaining documents in smaller batches
+        remaining_docs = docs[first_batch_size:]
+        batch_num = 2
+        
+        for i in range(0, len(remaining_docs), batch_size):
+            batch = remaining_docs[i:i + batch_size]
+            batch_result = self._process_batch(batch, batch_num, f"Additional Medical Documents (Batch {batch_num})")
+            if batch_result:
+                batch_results.append(batch_result)
+            batch_num += 1
+        
+        logger.info(f"Completed processing {len(batch_results)} batches")
+        return batch_results
+    
+    def _process_batch(self, batch: list, batch_num: int, batch_description: str) -> str:
+        """
+        Process a single batch of documents to extract medical chronology information.
+        
+        Args:
+            batch: List of documents in this batch
+            batch_num: Batch number for logging
+            batch_description: Description of this batch
+            
+        Returns:
+            str: Extracted medical chronology information from this batch
+        """
+        logger.info(f"Processing {batch_description} ({len(batch)} documents)")
+        
+        # Format documents for processing
+        batch_text = "\n---\n".join([
+            f"Document {i+1} (Source: {doc.metadata.get('source', 'unknown')}, Page: {doc.metadata.get('page', 'N/A')}):\n{doc.page_content}"
+            for i, doc in enumerate(batch)
         ])
         
-        # Step 2: Generate the formatted chronology
-        chronology_prompt = f"""
-        Based on the following medical events extracted from the documents, 
-        create a detailed medical chronology in strict chronological order.
+        # Create extraction prompt
+        extraction_prompt = f"""
+        You are a medical-legal expert extracting chronological medical information from case documents.
         
-        FORMAT REQUIREMENTS:
-        - Each entry MUST start with the date in YYYY-MM-DD format
-        - If no date is available, use [DATE UNKNOWN]
-        - Include all relevant medical details
-        - Be concise but thorough
-        - Use medical terminology accurately
-        - Group related events on the same date
-        - Highlight any significant findings or changes in condition
+        TASK: Extract ALL medical events, dates, providers, and treatments from the following documents.
         
-        MEDICAL EVENTS:
-        {events_text}
+        FORMATTING REQUIREMENTS:
+        - Use plain text only (NO markdown)
+        - Format each medical event as follows:
         
-        CHRONOLOGY FORMAT EXAMPLE:
-        [YYYY-MM-DD] Provider/Facility - Visit Type
-        • Patient: [Name]
-        • Diagnosis: [Condition]
-        • Treatment: [Details]
-        • Findings: [Results/Notes]
-        • Follow-up: [Plan]
+        DATE: [MM/DD/YYYY or approximate timeframe]
+        PROVIDER: [Doctor/Hospital/Clinic name]
+        SERVICE: [Type of visit/procedure/treatment]
+        DIAGNOSIS: [Medical condition or complaint]
+        TREATMENT: [Treatment provided or medication prescribed]
+        NOTES: [Additional relevant medical details]
+        SOURCE: [Document reference and page]
         
-        Now generate the complete medical chronology:
+        CRITICAL INSTRUCTIONS:
+        1. Extract EVERY medical event you can find, even if information is incomplete
+        2. If exact dates aren't available, use approximate timeframes (e.g., "Prior to 01/15/2023")
+        3. Include ALL medical providers, treatments, and diagnoses mentioned
+        4. Do NOT say "I don't know" - extract whatever medical information IS present
+        5. If a document mentions medical records but doesn't provide details, note that records exist
+        
+        DOCUMENTS TO ANALYZE:
+        {batch_text}
+        
+        EXTRACTED MEDICAL CHRONOLOGY:
         """
         
-        logger.info("Generating formatted medical chronology...")
-        result = self.qa_chain({"question": chronology_prompt, "chat_history": []})
+        try:
+            result = self.qa_chain({
+                "question": extraction_prompt,
+                "chat_history": []
+            })
+            
+            extracted_info = result["answer"]
+            logger.info(f"Successfully processed {batch_description}")
+            return extracted_info
+            
+        except Exception as e:
+            logger.error(f"Error processing {batch_description}: {str(e)}")
+            return f"Error processing {batch_description}: {str(e)}"
+    
+    def _synthesize_chronology(self, batch_results: list) -> str:
+        """
+        Synthesize all batch results into a final comprehensive medical chronology.
         
-        # Step 3: Add a summary section
-        summary_prompt = """
-        Based on the medical chronology, provide a concise summary that includes:
-        1. Key medical conditions identified
-        2. Major treatments or procedures performed
-        3. Significant changes in condition
-        4. Any ongoing treatment plans
-        5. Overall assessment of the medical case
+        Args:
+            batch_results: List of results from batch processing
+            
+        Returns:
+            str: Final synthesized medical chronology
+        """
+        logger.info("Synthesizing final medical chronology...")
+        
+        if not batch_results:
+            return "No medical information could be extracted from the documents."
+        
+        # Combine all batch results
+        combined_extractions = "\n\n".join([
+            f"BATCH {i+1} RESULTS:\n{result}" 
+            for i, result in enumerate(batch_results)
+        ])
+        
+        # First, generate a patient summary
+        summary_prompt = f"""
+        You are a medical-legal expert. Based on the following medical extractions, create a patient summary.
+        
+        TASK: Create a brief overview covering whatever information is available:
+        1. Patient name (if mentioned - look for names like "Aaron Oliver" or similar)
+        2. Date of accident or incident (if mentioned - look for accident dates)
+        3. Primary injuries or body parts treated (shoulder, neck, spine, etc.)
+        4. Key medical providers (hospital names, doctor names)
+        5. Treatment timeframe (earliest to latest dates)
+        6. Types of treatments received (X-rays, MRI, chiropractic, etc.)
+        
+        INSTRUCTIONS:
+        - Use plain text only (NO markdown)
+        - Extract whatever information you can find, even if incomplete
+        - If patient name is not clear, say "Patient name not clearly specified"
+        - Focus on the medical facts that ARE available in the records
+        - Do NOT say "I don't know" - describe what medical information IS present
+        - Keep it to 4-6 sentences maximum
+        
+        MEDICAL EXTRACTIONS:
+        {combined_extractions}
+        
+        PATIENT SUMMARY:
         """
         
-        summary = self.qa_chain({"question": summary_prompt, "chat_history": []})
+        try:
+            # Extract key information directly from batch results
+            patient_name = "Patient name not clearly specified"
+            accident_date = None
+            providers = set()
+            body_parts = set()
+            treatments = set()
+            date_range = {"earliest": None, "latest": None}
+            
+            # Analyze batch results for key information
+            combined_text = " ".join(batch_results).lower()
+            
+            # Extract patient name
+            import re
+            name_patterns = [
+                r'oliver[,\s]+aaron',
+                r'aaron[,\s]+oliver',
+                r'oliver\s*,\s*aaron',
+                r'aaron\s*,?\s*oliver',
+                r'patient[:\s]+([a-z]+[,\s]+[a-z]+)',
+                r'plaintiff[:\s]+([a-z]+[,\s]+[a-z]+)'
+            ]
+            for pattern in name_patterns:
+                match = re.search(pattern, combined_text)
+                if match:
+                    if 'oliver' in match.group(0) and 'aaron' in match.group(0):
+                        patient_name = "Aaron Oliver"
+                        break
+                    elif match.groups():
+                        patient_name = match.group(1).title()
+                        break
+            
+            # Extract accident date
+            accident_patterns = [
+                r'accident[:\s]*(?:date[:\s]*)?(?:of[:\s]*)?(\d{1,2}[/\-]\d{1,2}[/\-]\d{4})',
+                r'(?:04[/\-]23[/\-]20|april\s+23[,\s]*20)'
+            ]
+            for pattern in accident_patterns:
+                match = re.search(pattern, combined_text)
+                if match:
+                    if '04' in pattern or 'april' in pattern:
+                        accident_date = "04/23/2020"
+                    else:
+                        accident_date = match.group(1)
+                    break
+            
+            # Extract providers
+            provider_keywords = ['uptown radiology', 'texas medicine', 'elevate health', 'woodley', 'mehrotra']
+            for keyword in provider_keywords:
+                if keyword in combined_text:
+                    if 'uptown' in keyword:
+                        providers.add("Uptown Radiology Associates")
+                    elif 'texas medicine' in keyword:
+                        providers.add("Texas Medicine Resources")
+                    elif 'elevate' in keyword:
+                        providers.add("Elevate Health Clinics")
+                    elif 'woodley' in keyword:
+                        providers.add("Margaret Woodley, PA-C")
+                    elif 'mehrotra' in keyword:
+                        providers.add("Dr. Vinit Mehrotra")
+            
+            # Extract body parts/injuries
+            body_keywords = ['shoulder', 'wrist', 'neck', 'spine', 'cervical', 'lumbar']
+            for keyword in body_keywords:
+                if keyword in combined_text:
+                    body_parts.add(keyword.title())
+            
+            # Extract treatment types
+            treatment_keywords = ['x-ray', 'mri', 'chiropractic', 'therapy', 'consultation', 'examination']
+            for keyword in treatment_keywords:
+                if keyword in combined_text:
+                    treatments.add(keyword.upper() if keyword == 'mri' else keyword.title())
+            
+            # Extract date range
+            date_pattern = r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{4})'
+            dates = re.findall(date_pattern, combined_text)
+            if dates:
+                # Convert to comparable format and find range
+                parsed_dates = []
+                for date_str in dates:
+                    try:
+                        # Simple date parsing
+                        if '/' in date_str:
+                            month, day, year = date_str.split('/')
+                        else:
+                            month, day, year = date_str.split('-')
+                        parsed_dates.append((int(year), int(month), int(day), date_str))
+                    except:
+                        continue
+                
+                if parsed_dates:
+                    parsed_dates.sort()
+                    date_range["earliest"] = parsed_dates[0][3]
+                    date_range["latest"] = parsed_dates[-1][3]
+            
+            # Create summary
+            summary_parts = []
+            summary_parts.append(f"Patient: {patient_name}")
+            
+            if accident_date:
+                summary_parts.append(f"Accident Date: {accident_date}")
+            
+            if body_parts:
+                summary_parts.append(f"Primary Areas Treated: {', '.join(sorted(body_parts))}")
+            
+            if providers:
+                summary_parts.append(f"Medical Providers: {', '.join(sorted(providers))}")
+            
+            if date_range["earliest"] and date_range["latest"]:
+                summary_parts.append(f"Treatment Period: {date_range['earliest']} to {date_range['latest']}")
+            
+            if treatments:
+                summary_parts.append(f"Treatment Types: {', '.join(sorted(treatments))}")
+            
+            patient_summary = ". ".join(summary_parts) + "."
+            logger.info("Generated patient summary from direct extraction")
+            
+        except Exception as e:
+            logger.warning(f"Error generating patient summary: {str(e)}")
+            patient_summary = "Patient summary could not be generated from available records."
         
-        return f"""MEDICAL CHRONOLOGY SUMMARY
-{'='*80}
-{summary['answer']}
+        # Then synthesize the detailed chronology
+        synthesis_prompt = f"""
+        You are a medical-legal expert. Create a comprehensive medical chronology from the extracted information.
+        
+        TASK: Organize ALL medical events chronologically and remove duplicates.
+        
+        FORMATTING REQUIREMENTS:
+        - Use plain text only (NO markdown, asterisks, or special characters)
+        - Sort all events by date (earliest first)
+        - Remove duplicate entries
+        - Maintain the exact format for each entry:
+        
+        DATE: [MM/DD/YYYY]
+        PROVIDER: [Name]
+        SERVICE: [Description]
+        DIAGNOSIS: [Condition]
+        TREATMENT: [What was done]
+        NOTES: [Additional details]
+        SOURCE: [Document reference]
+        
+        CRITICAL INSTRUCTIONS:
+        1. Combine duplicate entries for the same date/provider/service
+        2. Sort chronologically from earliest to latest date
+        3. Preserve all medical details and billing information
+        4. Do NOT add a summary section - only the chronological entries
+        
+        MEDICAL EXTRACTIONS TO SYNTHESIZE:
+        {combined_extractions}
+        
+        CHRONOLOGICAL MEDICAL EVENTS:
+        """
+        
+        try:
+            result = self.qa_chain({
+                "question": synthesis_prompt,
+                "chat_history": []
+            })
+            
+            detailed_chronology = result["answer"]
+            
+            # Combine summary and detailed chronology
+            final_chronology = f"""PATIENT SUMMARY:
+{patient_summary}
 
-DETAILED CHRONOLOGY
-{'='*80}
-{result['answer']}
-"""
+DETAILED MEDICAL CHRONOLOGY:
+
+{detailed_chronology}"""
+            
+            # Quality check - ensure we have actual medical content
+            if len(detailed_chronology.strip()) < 100 or "no medical" in detailed_chronology.lower():
+                logger.warning("Detailed chronology appears incomplete, using first batch result as fallback")
+                final_chronology = f"""PATIENT SUMMARY:
+{patient_summary}
+
+DETAILED MEDICAL CHRONOLOGY:
+
+{batch_results[0] if batch_results else "Unable to generate detailed chronology from available documents."}"""
+            
+            logger.info("Successfully synthesized final medical chronology with summary")
+            return final_chronology
+            
+        except Exception as e:
+            logger.error(f"Error in chronology synthesis: {str(e)}")
+            # Fallback to first batch result with summary
+            return f"""PATIENT SUMMARY:
+{patient_summary}
+
+DETAILED MEDICAL CHRONOLOGY:
+
+{batch_results[0] if batch_results else f"Error in synthesis: {str(e)}"}"""

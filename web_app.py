@@ -84,6 +84,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
+    html_answer: Optional[str] = None
     sources: List[str]
     processing_time: Optional[str] = None
     source_count: Optional[int] = None
@@ -93,8 +94,118 @@ class ChronologyRequest(BaseModel):
 
 class ChronologyResponse(BaseModel):
     chronology: str
+    html_chronology: Optional[str] = None
 
 # Helper functions
+def format_answer_as_html(answer_text: str) -> str:
+    """Convert query answer text to formatted HTML."""
+    import re
+    import html
+    
+    # Escape HTML special characters
+    escaped_text = html.escape(answer_text)
+    
+    # Format headers (lines with ### or similar)
+    escaped_text = re.sub(r'###\s+(.+)', r'<h3>\1</h3>', escaped_text)
+    escaped_text = re.sub(r'##\s+(.+)', r'<h4>\1</h4>', escaped_text)
+    
+    # Format bold text (text between ** **)
+    escaped_text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', escaped_text)
+    
+    # Format bullet points
+    escaped_text = re.sub(r'^\s*-\s+(.+)$', r'<li>\1</li>', escaped_text, flags=re.MULTILINE)
+    escaped_text = re.sub(r'(<li>.+</li>\n)+', r'<ul>\g<0></ul>', escaped_text, flags=re.DOTALL)
+    
+    # Convert line breaks to HTML breaks
+    escaped_text = escaped_text.replace('\n', '<br>')
+    
+    # Wrap in a div with appropriate styling
+    html_content = f'<div class="answer-content">{escaped_text}</div>'
+    
+    return html_content
+
+def format_chronology_as_html(chronology_text: str) -> str:
+    """Convert chronology text to formatted HTML."""
+    import re
+    import html
+    
+    # Escape HTML special characters
+    escaped_text = html.escape(chronology_text)
+    
+    # Format the PATIENT SUMMARY section
+    escaped_text = re.sub(
+        r'PATIENT SUMMARY:\s*\n?(.*?)\n*DETAILED MEDICAL CHRONOLOGY:', 
+        r'<div class="patient-summary"><h3>PATIENT SUMMARY</h3><p class="summary-content">\1</p></div><h3>DETAILED MEDICAL CHRONOLOGY</h3>', 
+        escaped_text, 
+        flags=re.DOTALL
+    )
+    
+    # If no detailed section found, just format the summary
+    if 'PATIENT SUMMARY:' in escaped_text and 'DETAILED MEDICAL CHRONOLOGY' not in escaped_text:
+        escaped_text = re.sub(
+            r'PATIENT SUMMARY:\s*\n?(.*)', 
+            r'<div class="patient-summary"><h3>PATIENT SUMMARY</h3><p class="summary-content">\1</p></div>', 
+            escaped_text, 
+            flags=re.DOTALL
+        )
+    
+    # Format section headers (lines with ### or similar)
+    escaped_text = re.sub(r'###\s+(.+)', r'<h3>\1</h3>', escaped_text)
+    
+    # Format dates and medical entries
+    # Look for patterns like "MM/DD/YYYY" or "DATE: MM/DD/YYYY"
+    escaped_text = re.sub(r'(\d{1,2}/\d{1,2}/\d{4})', r'<strong>\1</strong>', escaped_text)
+    escaped_text = re.sub(r'DATE:\s+(.*)', r'<div class="medical-entry"><strong>DATE:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'PROVIDER:\s+(.*)', r'<strong>PROVIDER:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'SERVICE:\s+(.*)', r'<strong>SERVICE:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'DIAGNOSIS:\s+(.*)', r'<strong>DIAGNOSIS:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'TREATMENT:\s+(.*)', r'<strong>TREATMENT:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'NOTES:\s+(.*)', r'<strong>NOTES:</strong> \1<br>', escaped_text)
+    escaped_text = re.sub(r'SOURCE:\s+(.*)', r'<strong>SOURCE:</strong> \1</div><br>', escaped_text)
+    
+    # Convert line breaks to HTML breaks
+    escaped_text = escaped_text.replace('\n', '<br>')
+    
+    # Add some CSS styling
+    html_content = f'''
+    <div class="chronology-content">
+        <style>
+            .patient-summary {{
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 5px;
+                padding: 15px;
+                margin-bottom: 20px;
+            }}
+            .patient-summary h3 {{
+                color: #495057;
+                margin-top: 0;
+                margin-bottom: 10px;
+            }}
+            .summary-content {{
+                font-size: 14px;
+                line-height: 1.5;
+                margin: 0;
+            }}
+            .medical-entry {{
+                background-color: #ffffff;
+                border-left: 3px solid #007bff;
+                padding: 10px;
+                margin-bottom: 10px;
+                border-radius: 3px;
+            }}
+            .chronology-content h3 {{
+                color: #343a40;
+                border-bottom: 2px solid #007bff;
+                padding-bottom: 5px;
+            }}
+        </style>
+        {escaped_text}
+    </div>
+    '''
+    
+    return html_content
+
 def process_case(zip_path: Path, force_rebuild: bool = False) -> Dict[str, Any]:
     """Process a case ZIP file and create a vector store."""
     start_time = time.time()
@@ -210,8 +321,10 @@ def query_case(case_name: str, query: str) -> Dict[str, Any]:
 def generate_chronology(case_name: str) -> Dict[str, Any]:
     """Generate a medical chronology for a case."""
     case_dir = PROCESSED_DIR / case_name
+    logger.info(f"Generating chronology for case: {case_name}")
     
     if not case_dir.exists():
+        logger.error(f"Case directory not found: {case_dir}")
         return {
             'success': False,
             'error': f"Case directory not found: {case_dir}"
@@ -237,9 +350,11 @@ def generate_chronology(case_name: str) -> Dict[str, Any]:
         
         # Generate chronology
         chronology = processor.generate_medical_chronology()
+        logger.info(f"Chronology generated, length: {len(chronology) if chronology else 0} characters")
         
         # Check if the chronology is empty or just contains "I don't know"
         if not chronology or chronology.strip() == "I don't know." or "I don't know" in chronology:
+            logger.warning("Chronology contains 'I don't know' or is empty, using fallback method")
             # Fallback: Use a direct approach to extract medical information
             logger.warning("Standard chronology generation failed, using fallback method")
             
@@ -288,16 +403,24 @@ def generate_chronology(case_name: str) -> Dict[str, Any]:
                 logger.error(f"Fallback chronology generation failed: {e}")
                 # If fallback fails, return original chronology
         
+        # Format the chronology as HTML
+        html_chronology = format_chronology_as_html(chronology)
+        logger.info("HTML chronology formatted successfully")
+        
         return {
             'success': True,
-            'chronology': chronology
+            'chronology': chronology,
+            'html_chronology': html_chronology
         }
         
     except Exception as e:
         logger.error(f"Error generating chronology: {e}", exc_info=True)
+        error_message = str(e)
         return {
             'success': False,
-            'error': str(e)
+            'error': error_message,
+            'chronology': f"Error generating chronology: {error_message}",
+            'html_chronology': f"<div class='alert alert-danger'>Error generating chronology: {error_message}</div>"
         }
 
 def list_cases() -> List[Dict[str, Any]]:
@@ -399,8 +522,14 @@ async def api_query_case(request: QueryRequest):
     contains_suggestions = "**Suggestions:**" in result.get('answer', '')
     
     # Format the response
+    answer_text = result['answer']
+    
+    # Format the answer as HTML
+    html_answer = format_answer_as_html(answer_text)
+    
     response = {
-        'answer': result['answer'],
+        'answer': answer_text,
+        'html_answer': html_answer,
         'sources': result['sources'],
         'processing_time': f"{processing_time:.2f}s",
         'source_count': source_count
@@ -416,11 +545,16 @@ async def api_generate_chronology(request: ChronologyRequest):
     if not result['success']:
         raise HTTPException(status_code=404, detail=result['error'])
     
+    # Convert the chronology text to HTML format
+    chronology_text = result['chronology']
+    html_chronology = format_chronology_as_html(chronology_text)
+    
     return {
-        'chronology': result['chronology']
+        'chronology': chronology_text,
+        'html_chronology': html_chronology
     }
 
 # Run the application
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8007)
+    uvicorn.run(app, host="0.0.0.0", port=8013)

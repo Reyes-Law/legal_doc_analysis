@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Chronology Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        .test-button:hover {
+            background-color: #0056b3;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        .error {
+            color: #dc3545;
+            background-color: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        #chronology-result {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Medical Chronology Generation Test</h1>
+        
+        <button class="test-button" onclick="testChronology()">
+            Generate Medical Chronology for "Medical Records" Case
+        </button>
+        
+        <div id="status"></div>
+        <div id="chronology-result"></div>
+    </div>
+
+    <script>
+        async function testChronology() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('chronology-result');
+            
+            statusDiv.innerHTML = '<div class="loading">Generating medical chronology... This may take 30-60 seconds.</div>';
+            resultDiv.innerHTML = '';
+            
+            try {
+                const response = await fetch('/api/chronology', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        case_name: 'Medical Records'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                statusDiv.innerHTML = '<div style="color: green;">✅ Chronology generated successfully!</div>';
+                
+                // Display the formatted HTML chronology
+                resultDiv.innerHTML = data.html_chronology;
+                
+                // Also show raw text length for debugging
+                const rawLength = data.chronology ? data.chronology.length : 0;
+                statusDiv.innerHTML += `<div style="color: #666; font-size: 12px; margin-top: 10px;">Raw text length: ${rawLength} characters</div>`;
+                
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>

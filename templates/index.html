@@ -23,6 +23,46 @@
             font-size: 0.9em;
             color: #666;
         }
+        .chronology-content {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+        }
+        .chronology-content h3 {
+            color: #2c3e50;
+            margin-top: 1.5rem;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.5rem;
+        }
+        .chronology-content strong {
+            color: #2980b9;
+        }
+        .chronology-content p {
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+        }
+        .chronology-content p:nth-child(odd) {
+            background-color: #f8f9fa;
+        }
+        .answer-content {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+        }
+        .answer-content h3, .answer-content h4 {
+            color: #2c3e50;
+            margin-top: 1rem;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.3rem;
+        }
+        .answer-content strong {
+            color: #2980b9;
+        }
+        .answer-content ul {
+            margin-left: 0;
+            padding-left: 1.2rem;
+        }
+        .answer-content li {
+            margin-bottom: 0.5rem;
+        }
     </style>
 </head>
 <body>
@@ -296,7 +336,12 @@
                 queryLoading.style.display = 'none';
                 queryResult.style.display = 'block';
                 
-                queryAnswer.textContent = data.answer;
+                // Use the HTML-formatted answer if available, otherwise fallback to text
+                if (data.html_answer) {
+                    queryAnswer.innerHTML = data.html_answer;
+                } else {
+                    queryAnswer.textContent = data.answer;
+                }
                 
                 querySources.innerHTML = '';
                 if (data.sources && data.sources.length > 0) {
@@ -351,8 +396,12 @@
                 chronologyLoading.style.display = 'none';
                 chronologyResult.style.display = 'block';
                 
-                // Replace newlines with <br> tags for proper HTML display
-                chronologyContent.innerHTML = data.chronology.replace(/\n/g, '<br>');
+                // Use the HTML-formatted chronology if available, otherwise fallback to text with line breaks
+                if (data.html_chronology) {
+                    chronologyContent.innerHTML = data.html_chronology;
+                } else {
+                    chronologyContent.innerHTML = data.chronology.replace(/\n/g, '<br>');
+                }
             })
             .catch(error => {
                 chronologyLoading.style.display = 'none';
